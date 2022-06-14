@@ -1,12 +1,16 @@
 import sys
+import sqlite3;
 from PySide6.QtGui import QPalette, QColor, QFont
 from PySide6.QtWidgets import *
+import data_management
 
 
 start_date = 1
 end_date = 2
 project_nr = 6     # rowne 1 gdy przyklady usuniete
 colors = ['yellow', 'white', 'blue', 'red', 'pink', 'purple']
+
+Baza = data_management.Database('banana')
 
 
 
