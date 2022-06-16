@@ -1,9 +1,10 @@
 import sys
 import sqlite3;
 from PySide6.QtGui import QPalette, QColor, QFont
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import *
-from matplotlib import projections
 import data_management
+from datetime import datetime
 
 
 start_date = 1
@@ -32,17 +33,43 @@ class Color(QWidget):
         palette.setColor(QPalette.Window, QColor(color))
         self.setPalette(palette)
 
+class Button(QPushButton):
+    def __init__(self, text):
+        super(Button, self).__init__()
+        self.setText(text)
+    def Clicked(self):
+        MainWindow.printTable(str(self.text()))
+
 
 class MainWindow(QMainWindow):
+    lista = []
+    rows = []
     def add_project(self):
-        baza.addProject(('Project1', 'Project one long description', '2022-06-14', '', 1, 0, 0))
+        baza.addProject(('Project1', 'Project one long description', datetime.now(), '', 1, 0, 0))
+        self.printTable('projects') 
+
+    def delete_project(self):
+        baza.addProject(('Project1', 'Project one long description', datetime.now(), '', 1, 0, 0))
+        self.printTable('projects') 
     
     def add_task(self):
-        baza.addTask(('Project1', 'Project one long description', '2022-06-14', '', 1, 0, 0))
+        baza.addTask(('Task1', 'Task description', datetime.now(), '', 1, 0, 0))
     
     def add_employe(self):
         baza.addEmploye(('Jan', 'Kowalski', 'IT', 'Dev'))
     
+    def printTable(self, tableName):
+        self.rows = baza.selectTable(tableName)  
+        self.refreshList(self.rows)      
+        
+
+    def refreshList(self, rows):
+        self.lista.clear()
+        for row in rows:
+            self.lista.addItem(QListWidgetItem(str(row)))
+        self.lista.repaint()
+    
+        
     def __init__(self):
         super().__init__()
 
@@ -57,14 +84,7 @@ class MainWindow(QMainWindow):
         tab2_2 = QTabWidget() #Project Management tab
         tab3 = QTabWidget() #Employes tab
         
-        buttonAddProject = QPushButton('Add Project')
-        buttonAddProject.clicked.connect(lambda: self.add_project())
-
-        buttonAddEmploye = QPushButton('Add Employe')
-        buttonAddEmploye.clicked.connect(lambda: self.add_employe())
-
-        buttonAddTask = QPushButton('Add Task')
-        buttonAddTask.clicked.connect(lambda: self.add_task())
+           
         
         tabs.setTabPosition(QTabWidget.North)
         tabs.setMovable(True)
@@ -74,17 +94,78 @@ class MainWindow(QMainWindow):
         tabs.addTab(tab2_2, "Add Project2")
         tabs.addTab(tab3, "Użytkownicy")
         
-           
+        
         projects = QHBoxLayout()
-        projectsLeft = QHBoxLayout()
-        projectsRight = QHBoxLayout()
-        projectsLeft.addWidget(buttonAddEmploye)
-        projectsRight.addWidget(buttonAddProject)
-        projectsRight.addWidget(buttonAddTask)
+        projectsLeft = QVBoxLayout()
+        projectsRight = QStackedLayout() 
+        
+
+        projectLayout = QVBoxLayout()
+        projectLayout.setAlignment(Qt.AlignHCenter)
+        projectLayout.addWidget(QLabel("PROJECTS MANAGEMENT"))
+        projectLayout.addWidget(QPushButton('Press Me'))
+
+        employesLayout = QVBoxLayout()
+        employesLayout.setAlignment(Qt.AlignCenter)
+        employesLayout.addWidget(QLabel("EMPLOYES MANAGEMENT"))
+        employesLayout.addWidget(QPushButton("some button"))
+
+        tasksLayout = QVBoxLayout()     
+        tasksLayout.setAlignment(Qt.AlignCenter)
+        tasksLayout.addWidget(QLabel("TASKS MANAGEMENT"))
+        for x in range(5):
+            tasksLayout.addWidget(QLabel("Task"+ str(x)))
+
+        projectWidget = QWidget()
+        employesWidget = QWidget()
+        tasksWidget = QWidget()
+
+        projectWidget.setLayout(projectLayout)
+        employesWidget.setLayout(employesLayout)
+        tasksWidget.setLayout(tasksLayout)
+                
+        projectsRight.addWidget(projectWidget)
+        projectsRight.addWidget(employesWidget)
+        projectsRight.addWidget(tasksWidget)
+        
+        buttonProject = QPushButton('Project')
+        buttonProject.clicked.connect(lambda: projectsRight.setCurrentIndex(0))
+        buttonEmployes = QPushButton('Employes')
+        buttonEmployes.clicked.connect(lambda: projectsRight.setCurrentIndex(1))
+        buttonTasks = QPushButton('Tasks')
+        buttonTasks.clicked.connect(lambda: projectsRight.setCurrentIndex(2))
+        
+
+
+        projectsLeft.setAlignment(Qt.AlignLeft)
+        projectsLeft.addWidget(buttonProject)
+        projectsLeft.addWidget(buttonEmployes)
+        projectsLeft.addWidget(buttonTasks)
+ 
+
+        buttonAddProject = QPushButton('Add Project')
+        buttonAddProject.clicked.connect(lambda: self.add_project())
+
+        buttonAddEmploye = QPushButton('Add Employe')
+        buttonAddEmploye.clicked.connect(lambda: self.printTable('projects'))
+
+        buttonProjects = Button('projects')
+        buttonProjects.clicked.connect(buttonProjects.Clicked)
+        
+
+        buttonAddTask = QPushButton('Add Task')
+        buttonAddTask.clicked.connect(lambda: self.add_task())
 
         projects.addLayout(projectsLeft)
         projects.addLayout(projectsRight)
         tab2_2.setLayout(projects)     
+        tempLayout = QHBoxLayout()
+        self.lista = QListWidget() 
+        tempLayout.addWidget(self.lista)
+        tempLayout.addWidget(buttonAddProject)
+        tempLayout.addWidget(buttonAddEmploye)
+        tempLayout.addWidget(buttonProjects)
+        tab1_2.setLayout(tempLayout)
         
         layout = QHBoxLayout()
         left_panel = QGridLayout()

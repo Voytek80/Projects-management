@@ -65,3 +65,13 @@ class Database(object):
         cursorObj.execute('INSERT INTO tasks(projectId, employe, title, description, urgency, status, startDate, finishDate, creationDate) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', entities)
         
         self.con.commit()
+
+
+    def selectTable(self, tableName):
+
+        cursorObj = self.con.cursor()
+
+        cursorObj.execute('SELECT * FROM ' + tableName)
+        rows = cursorObj.fetchall()
+
+        return rows
