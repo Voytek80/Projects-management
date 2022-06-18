@@ -130,22 +130,21 @@ class PlotBrowser(QWidget):
         self.refresh()
 
     def refresh(self):
-
-
         df = []
         fetch_data = sql_fetch(f"SELECT name, start_date, finish_date, status FROM tasks WHERE project_id = {self.combobox.currentIndex()};")
-        for name, start, finish, status in fetch_data:
-            if finish == '': finish = datetime.now()
-            df.append(dict(Task=name, Start=start, Finish=finish, Resource=status))
+        if fetch_data:
+            for name, start, finish, status in fetch_data:
+                if finish == '': finish = datetime.now()
+                df.append(dict(Task=name, Start=start, Finish=finish, Resource=status))
 
-        colors = {'Not Started': 'rgb(220, 0, 0)',
-                  'Incomplete': (1, 0.9, 0.16),
-                  'Complete': 'rgb(0, 255, 100)'}
+            colors = {'Not Started': 'rgb(220, 0, 0)',
+                      'Incomplete': (1, 0.9, 0.16),
+                      'Complete': 'rgb(0, 255, 100)'}
 
-        fig = ff.create_gantt(df, colors=colors, index_col='Resource', show_colorbar=True,
-                              group_tasks=True)
+            fig = ff.create_gantt(df, colors=colors, index_col='Resource', show_colorbar=True,
+                                  group_tasks=True)
 
-        self.browser.setHtml(fig.to_html(include_plotlyjs='cdn'))
+            self.browser.setHtml(fig.to_html(include_plotlyjs='cdn'))
 
 
 class TableView(QTableView):
