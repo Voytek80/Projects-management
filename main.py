@@ -1,27 +1,98 @@
 import sys
-import sqlite3;
 from PySide6.QtGui import QPalette, QColor, QFont
 from PySide6.QtCore import Qt
+from PySide6.QtSql import *
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import *
-import data_management
 from datetime import datetime
+import plotly.figure_factory as ff
+import numpy
 
 
-start_date = 1
-end_date = 2
-project_nr = 6     # rowne 1 gdy przyklady usuniete
-colors = ['yellow', 'white', 'blue', 'red', 'pink', 'purple']
-
-baza = data_management.Database('database')
-baza.drop_table('projects')
-baza.drop_table('employees')
-baza.drop_table('tasks')
-
-baza.create_table("employees(id INTEGER PRIMARY KEY AUTOINCREMENT, name text, department text, position text, tasks int)")
-baza.create_table("projects(id INTEGER PRIMARY KEY AUTOINCREMENT, title text, description text, startDate text, finishDate text, urgency int, allTasks int, doneTasks int)")
-baza.create_table("tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, projectId int, employe int, title text, description text, urgency int, status int, startDate text, finishDate text, creationDate text)")
+def sql_query(query):
+    q = QSqlQuery()
+    q.exec(query)
 
 
+def sql_fetch(query):
+    q = QSqlQuery()
+    q.exec(query)
+    data = []
+    while q.next():
+        data_line = [q.record().value("name"), q.record().value("start_date"), q.record().value("finish_date"),
+                     q.record().value("status")]
+        data.append(data_line)
+    return data
+
+
+def sql_fetch_one(table_name, attribute_name):
+    q = QSqlQuery()
+    q.exec(f'SELECT {attribute_name} FROM {table_name}')
+    data = []
+    while q.next():
+        data.append(q.record().value(attribute_name))
+    return data
+
+
+def create_connection():
+    con = QSqlDatabase.addDatabase("QSQLITE")
+    con.setDatabaseName("database.sqlite")
+    if not con.open():
+        QMessageBox.critical(
+            None,
+            "QTableView Example - Error!",
+            "Database Error: %s" % con.lastError().databaseText(),
+        )
+        return False
+    return True
+
+
+def setup_database():
+    sql_query("""        
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                name VARCHAR(40) NOT NULL,
+                description VARCHAR(500),
+                start_date VARCHAR(50),
+                finish_date VARCHAR(40),
+                project_leader_id INTEGER,
+                FOREIGN KEY (project_leader_id) 
+                    REFERENCES employees (id)        
+            )
+            """)
+
+    sql_query("""        
+            CREATE TABLE employees (
+                id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                name VARCHAR(40),
+                surname VARCHAR(40), 
+                hire_date VARCHAR(50),
+                tasks INTEGER
+            )
+            """)
+
+    sql_query("""        
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+                name VARCHAR(40) NOT NULL,
+                description VARCHAR(500),
+                start_date VARCHAR(40),
+                finish_date VARCHAR(40),
+                status VARCHAR(20),
+                employee_id INTEGER,
+                project_id INTEGER,
+                FOREIGN KEY (project_id) 
+                    REFERENCES projects (id),
+                FOREIGN KEY (employee_id) 
+                    REFERENCES employees (id)
+
+            )
+            """)
+
+
+class MainWidget(QWidget):
+    def __init__(self):
+        super(MainWidget, self).__init__()
 
 
 class Color(QWidget):
@@ -33,234 +104,365 @@ class Color(QWidget):
         palette.setColor(QPalette.Window, QColor(color))
         self.setPalette(palette)
 
-class Button(QPushButton):
-    def __init__(self, text):
-        super(Button, self).__init__()
+
+class Label(QLabel):
+    def __init__(self, text, alignment):
+        super(Label, self).__init__()
         self.setText(text)
-    def Clicked(self):
-        MainWindow.printTable(str(self.text()))
+        self.setAlignment(alignment)
+
+
+class PlotBrowser(QWidget):
+    def __init__(self):
+        super(PlotBrowser, self).__init__()
+        self.browser = QWebEngineView(self)
+        self.button_refresh = QPushButton('Refresh')
+        self.button_refresh.clicked.connect(lambda: self.refresh())
+        self.combobox = QComboBox()
+        self.combobox.currentIndexChanged.connect(lambda: self.refresh())
+        vlayout = QVBoxLayout(self)
+        vlayout.addWidget(self.combobox)
+        vlayout.addWidget(self.browser)
+        vlayout.addWidget(self.button_refresh)
+        fetch_projects = sql_fetch_one('projects', 'name')
+        for project_name in fetch_projects:
+            self.combobox.addItem(project_name)
+        self.refresh()
+
+    def refresh(self):
+
+
+        df = []
+        fetch_data = sql_fetch(f"SELECT name, start_date, finish_date, status FROM tasks WHERE project_id = {self.combobox.currentIndex()};")
+        for name, start, finish, status in fetch_data:
+            if finish == '': finish = datetime.now()
+            df.append(dict(Task=name, Start=start, Finish=finish, Resource=status))
+
+        colors = {'Not Started': 'rgb(220, 0, 0)',
+                  'Incomplete': (1, 0.9, 0.16),
+                  'Complete': 'rgb(0, 255, 100)'}
+
+        fig = ff.create_gantt(df, colors=colors, index_col='Resource', show_colorbar=True,
+                              group_tasks=True)
+
+        self.browser.setHtml(fig.to_html(include_plotlyjs='cdn'))
+
+
+class TableView(QTableView):
+    def __init__(self, table_name, collumn_names):
+        super(TableView, self).__init__()
+        self.table_name = table_name
+        self.column_names = collumn_names
+        self.model = QSqlTableModel(self)
+        self.setup_model(self.table_name, self.column_names)
+        self.setModel(self.model)
+        self.resizeColumnsToContents()
+        self.resizeRowsToContents()
+
+    def setup_model(self, table_name, attributes):
+        self.model.setTable(table_name)
+        self.model.setEditStrategy(QSqlTableModel.OnManualSubmit)
+        for i in range(len(attributes)):
+            self.model.setHeaderData(i, Qt.Horizontal, attributes[i])
+        self.model.select()
+
+    def submit(self):
+        self.model.submitAll()
+
+    def refresh(self):
+        self.model.select()
+
+
+class TableViewProject(TableView):
+    def add(self, data):
+        insertDataQuery = QSqlQuery()
+        insertDataQuery.prepare(
+            """
+            INSERT INTO projects (
+                name,
+                description,
+                start_date,
+                finish_date,
+                project_leader_id
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """
+        )
+        for i in range(len(data)):
+            insertDataQuery.addBindValue(data[i])
+        print(insertDataQuery.exec())
+        self.model.select()
+        self.resizeColumnsToContents()
+        self.resizeRowsToContents()
+
+    def delete(self, id):
+        row = id.row()
+        index = self.model.data(self.model.index(row, 0))
+        sql_query(f"DELETE FROM projects WHERE id = {index};")
+        self.model.select()
+        # self.model.setQuery(QSqlQuery("SELECT name FROM projects;"))
+        self.model.selectRow(row + 1)
+
+
+class TableViewEmployees(TableView):
+    def add(self, data):
+        insertDataQuery = QSqlQuery()
+        insertDataQuery.prepare(
+            """
+            INSERT INTO employees (
+                name,
+                surname,
+                hire_date,
+                tasks
+            )
+            VALUES (?, ?, ?, ?)
+            """
+        )
+        print(data)
+        for i in data:
+            insertDataQuery.addBindValue(i)
+        insertDataQuery.exec()
+        self.model.select()
+        self.resizeColumnsToContents()
+        self.resizeRowsToContents()
+
+    def delete(self, id):
+        row = id.row()
+        index = self.model.data(self.model.index(row, 0))
+        sql_query(f"DELETE FROM employees WHERE id = {index};")
+        self.model.select()
+        self.model.selectRow(row + 1)
+
+
+class TableViewTasks(TableView):
+    def add(self, data):
+        insertDataQuery = QSqlQuery()
+        insertDataQuery.prepare(
+            """
+            INSERT INTO tasks (
+                name,
+                description,
+                start_date,
+                finish_date,
+                status,
+                employee_id,
+                project_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+        )
+        for i in range(len(data)):
+            insertDataQuery.addBindValue(data[i])
+        insertDataQuery.exec()
+        self.model.select()
+        self.resizeColumnsToContents()
+        self.resizeRowsToContents()
+
+    def delete(self, id):
+        row = id.row()
+        index = self.model.data(self.model.index(row, 0))
+        sql_query(f"DELETE FROM tasks WHERE id = {index};")
+        self.model.select()
+        self.model.selectRow(row + 1)
+
+
+class TextField(QWidget):
+    def __init__(self, text):
+        super(TextField, self).__init__()
+        self.label = Label(text, Qt.AlignCenter)
+        self.field = QLineEdit()
+        self.layout = QHBoxLayout()
+        self.layout.addWidget(self.label)
+        self.layout.addWidget(self.field)
+        self.setLayout(self.layout)
+
+
+class DataField(QWidget):
+    def __init__(self, text):
+        super(DataField, self).__init__()
+        self.label = Label(text, Qt.AlignCenter)
+        self.field = QDateEdit()
+        self.layout = QHBoxLayout()
+        self.layout.addWidget(self.label)
+        self.layout.addWidget(self.field)
+        self.setLayout(self.layout)
 
 
 class MainWindow(QMainWindow):
-    lista = []
-    rows = []
-    def add_project(self):
-        baza.addProject(('Project1', 'Project one long description', datetime.now(), '', 1, 0, 0))
-        self.printTable('projects') 
-
-    def delete_project(self):
-        baza.addProject(('Project1', 'Project one long description', datetime.now(), '', 1, 0, 0))
-        self.printTable('projects') 
-    
-    def add_task(self):
-        baza.addTask(('Task1', 'Task description', datetime.now(), '', 1, 0, 0))
-    
-    def add_employe(self):
-        baza.addEmploye(('Jan', 'Kowalski', 'IT', 'Dev'))
-    
-    def printTable(self, tableName):
-        self.rows = baza.selectTable(tableName)  
-        self.refreshList(self.rows)      
-        
-
-    def refreshList(self, rows):
-        self.lista.clear()
-        for row in rows:
-            self.lista.addItem(QListWidgetItem(str(row)))
-        self.lista.repaint()
-    
-        
-    def __init__(self):
-        super().__init__()
-
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setWindowTitle("Projects Management")
-        self.setGeometry(150, 100, 900, 600)
+        self.setGeometry(150, 100, 1000, 800)
 
-        global tabs, tab1, tab2, left_panel, right_panel
-        tabs = QTabWidget()
-        tab1 = QTabWidget() #Progress Tab
-        tab1_2 = QTabWidget() #Progress Tab Single Project
-        tab2 = QTabWidget() #Project Management tab
-        tab2_2 = QTabWidget() #Project Management tab
-        tab3 = QTabWidget() #Employes tab
-        
-           
-        
-        tabs.setTabPosition(QTabWidget.North)
-        tabs.setMovable(True)
-        tabs.addTab(tab1, "Main")
-        tabs.addTab(tab1_2, "Main2")
-        tabs.addTab(tab2, "Add Project")
-        tabs.addTab(tab2_2, "Add Project2")
-        tabs.addTab(tab3, "Użytkownicy")
-        
-        
-        projects = QHBoxLayout()
-        projectsLeft = QVBoxLayout()
-        projectsRight = QStackedLayout() 
-        
+        primary_widget = MainWidget()
+        projects = QVBoxLayout()
 
-        projectLayout = QVBoxLayout()
-        projectLayout.setAlignment(Qt.AlignHCenter)
-        projectLayout.addWidget(QLabel("PROJECTS MANAGEMENT"))
-        projectLayout.addWidget(QPushButton('Press Me'))
+        projects_left = QHBoxLayout()
+        projects_right = QStackedLayout()
 
-        employesLayout = QVBoxLayout()
-        employesLayout.setAlignment(Qt.AlignCenter)
-        employesLayout.addWidget(QLabel("EMPLOYES MANAGEMENT"))
-        employesLayout.addWidget(QPushButton("some button"))
+        project_layout = QVBoxLayout()
+        project_layout.setAlignment(Qt.AlignHCenter)
+        project_layout.addWidget(Label("PROJECTS MANAGEMENT", Qt.AlignCenter))
+        project_table = TableViewProject('projects', ('ID', 'Name', 'Description', 'Start Date',
+                                                      'Finish Date', 'Leader'))
+        project_layout.addWidget(project_table)
+        projects_layout_add = QHBoxLayout()
+        add_name = TextField('Name: ')
+        projects_layout_add.addWidget(add_name)
+        add_description = TextField('Description: ')
+        projects_layout_add.addWidget(add_description)
+        add_leader = TextField('Leader: ')
+        projects_layout_add.addWidget(add_leader)
+        project_layout_bottom = QHBoxLayout()
+        project_layout_bottom.setAlignment(Qt.AlignCenter)
+        btn_add_project = QPushButton('Add')
+        btn_add_project.clicked.connect(lambda: project_table.add((add_name.field.text(), add_description.field.text(),
+                                                                   str(datetime.now()), ' ', 1)))
+        btn_delete_project = QPushButton('Delete')
+        btn_delete_project.clicked.connect(lambda: project_table.delete(project_table.currentIndex()))
+        btn_save_project = QPushButton('Save')
+        btn_save_project.clicked.connect(lambda: project_table.submit())
+        btn_refresh_project = QPushButton('Refresh')
+        btn_refresh_project.clicked.connect(lambda: project_table.refresh())
 
-        tasksLayout = QVBoxLayout()     
-        tasksLayout.setAlignment(Qt.AlignCenter)
-        tasksLayout.addWidget(QLabel("TASKS MANAGEMENT"))
-        for x in range(5):
-            tasksLayout.addWidget(QLabel("Task"+ str(x)))
+        project_layout_bottom.addWidget(btn_add_project)
+        project_layout_bottom.addWidget(btn_delete_project)
+        project_layout_bottom.addWidget(btn_save_project)
+        project_layout_bottom.addWidget(btn_refresh_project)
 
-        projectWidget = QWidget()
-        employesWidget = QWidget()
-        tasksWidget = QWidget()
+        pla = QWidget()
+        pla.setLayout(projects_layout_add)
+        plb = QWidget()
+        plb.setLayout(project_layout_bottom)
+        project_layout.addWidget(pla)
+        project_layout.addWidget(plb)
 
-        projectWidget.setLayout(projectLayout)
-        employesWidget.setLayout(employesLayout)
-        tasksWidget.setLayout(tasksLayout)
-                
-        projectsRight.addWidget(projectWidget)
-        projectsRight.addWidget(employesWidget)
-        projectsRight.addWidget(tasksWidget)
-        
-        buttonProject = QPushButton('Project')
-        buttonProject.clicked.connect(lambda: projectsRight.setCurrentIndex(0))
-        buttonEmployes = QPushButton('Employes')
-        buttonEmployes.clicked.connect(lambda: projectsRight.setCurrentIndex(1))
-        buttonTasks = QPushButton('Tasks')
-        buttonTasks.clicked.connect(lambda: projectsRight.setCurrentIndex(2))
-        
+        employees_layout = QVBoxLayout()
+        employees_layout.setAlignment(Qt.AlignCenter)
 
+        employees_table = TableViewEmployees('employees', ('ID', 'Name', "Surname", 'Hired Date', 'Tasks'))
+        employees_layout.addWidget(Label("EMPLOYEES MANAGEMENT", Qt.AlignCenter))
+        employees_layout.addWidget(employees_table)
 
-        projectsLeft.setAlignment(Qt.AlignLeft)
-        projectsLeft.addWidget(buttonProject)
-        projectsLeft.addWidget(buttonEmployes)
-        projectsLeft.addWidget(buttonTasks)
- 
+        employees_layout_add = QHBoxLayout()
+        add_employee_name = TextField('Name: ')
+        employees_layout_add.addWidget(add_employee_name)
+        add_employee_surname = TextField('Surname: ')
+        employees_layout_add.addWidget(add_employee_surname)
+        add_hire_date = DataField('Hire Date: ')
+        employees_layout_add.addWidget(add_hire_date)
 
-        buttonAddProject = QPushButton('Add Project')
-        buttonAddProject.clicked.connect(lambda: self.add_project())
+        employees_layout_bottom = QHBoxLayout()
+        employees_layout_bottom.setAlignment(Qt.AlignCenter)
+        btn_add_employees = QPushButton('Add')
+        btn_add_employees.clicked.connect(lambda: employees_table.add((add_employee_name.field.text(),
+                                                                       add_employee_surname.field.text(),
+                                                                       add_hire_date.field.text(), 0)))
+        btn_delete_employees = QPushButton('Delete')
+        btn_delete_employees.clicked.connect(lambda: employees_table.delete(employees_table.currentIndex()))
+        btn_save_employees = QPushButton('Save')
+        btn_save_employees.clicked.connect(lambda: employees_table.submit())
+        btn_refresh_employees = QPushButton('Refresh')
+        btn_refresh_employees.clicked.connect(lambda: employees_table.refresh())
 
-        buttonAddEmploye = QPushButton('Add Employe')
-        buttonAddEmploye.clicked.connect(lambda: self.printTable('projects'))
+        employees_layout_bottom.addWidget(btn_add_employees)
+        employees_layout_bottom.addWidget(btn_delete_employees)
+        employees_layout_bottom.addWidget(btn_save_employees)
+        employees_layout_bottom.addWidget(btn_refresh_employees)
+        ela = QWidget()
+        ela.setLayout(employees_layout_add)
+        elb = QWidget()
+        elb.setLayout(employees_layout_bottom)
+        employees_layout.addWidget(ela)
+        employees_layout.addWidget(elb)
 
-        buttonProjects = Button('projects')
-        buttonProjects.clicked.connect(buttonProjects.Clicked)
-        
+        tasks_layout = QVBoxLayout()
+        tasks_layout.setAlignment(Qt.AlignHCenter)
+        tasks_layout.addWidget(Label("TASKS MANAGEMENT", Qt.AlignCenter))
+        tasks_table = TableViewTasks('tasks', ('ID', 'Name', 'Description', 'Start Date', 'Finish Date',
+                                               'Status', 'Employee', 'Project'))
+        tasks_layout.addWidget(tasks_table)
+        tasks_layout_add = QHBoxLayout()
+        add_task_name = TextField('Name: ')
+        tasks_layout_add.addWidget(add_task_name)
+        add_task_description = TextField('Description: ')
+        tasks_layout_add.addWidget(add_task_description)
+        add_task_status = TextField('Status: ')
+        tasks_layout_add.addWidget(add_task_status)
+        add_task_employee = TextField('Employee: ')
+        tasks_layout_add.addWidget(add_task_employee)
+        add_task_project = TextField('Project: ')
+        tasks_layout_add.addWidget(add_task_project)
+        tasks_layout_bottom = QHBoxLayout()
+        tasks_layout_bottom.setAlignment(Qt.AlignCenter)
+        btn_add_tasks = QPushButton('Add')
+        btn_add_tasks.clicked.connect(lambda: tasks_table.add((add_task_name.field.text(),
+                                                               add_task_description.field.text(),
+                                                               str(datetime.now()), '',
+                                                               add_task_status.field.text(),
+                                                               2, 1)))
+        btn_delete_tasks = QPushButton('Delete')
+        btn_delete_tasks.clicked.connect(lambda: tasks_table.delete(tasks_table.currentIndex()))
+        btn_save_tasks = QPushButton('Save')
+        btn_save_tasks.clicked.connect(lambda: tasks_table.submit())
+        btn_refresh_tasks = QPushButton('Refresh')
+        btn_refresh_tasks.clicked.connect(lambda: tasks_table.refresh())
 
-        buttonAddTask = QPushButton('Add Task')
-        buttonAddTask.clicked.connect(lambda: self.add_task())
+        tasks_layout_bottom.addWidget(btn_add_tasks)
+        tasks_layout_bottom.addWidget(btn_delete_tasks)
+        tasks_layout_bottom.addWidget(btn_save_tasks)
+        tasks_layout_bottom.addWidget(btn_refresh_tasks)
 
-        projects.addLayout(projectsLeft)
-        projects.addLayout(projectsRight)
-        tab2_2.setLayout(projects)     
-        tempLayout = QHBoxLayout()
-        self.lista = QListWidget() 
-        tempLayout.addWidget(self.lista)
-        tempLayout.addWidget(buttonAddProject)
-        tempLayout.addWidget(buttonAddEmploye)
-        tempLayout.addWidget(buttonProjects)
-        tab1_2.setLayout(tempLayout)
-        
-        layout = QHBoxLayout()
-        left_panel = QGridLayout()
-        header = QLabel("Project name")
-        font = QFont("Times New Roman", 15, QFont.Bold)
-        header.setFont(font)
-        left_panel.addWidget(header, 0, 1)
-        left_panel.addWidget(QLabel("                                    "), 0, 1)
-        right_panel = QGridLayout()
-        right_panel.setSpacing(1)
+        tla = QWidget()
+        tla.setLayout(tasks_layout_add)
+        tlb = QWidget()
+        tlb.setLayout(tasks_layout_bottom)
+        tasks_layout.addWidget(tla)
+        tasks_layout.addWidget(tlb)
 
-        for i in range(1,19):
-            left_panel.addWidget(QLabel(" "), i, 0)
+        project_widget = QWidget()
+        employees_widget = QWidget()
+        tasks_widget = QWidget()
+        gantt_widget = PlotBrowser()
 
-        for rows in range(20):
-            for columns in range(30):
-                right_panel.setColumnStretch(columns, 2)
-                right_panel.setRowStretch(rows, 1)
-                right_panel.addWidget(QLabel(str(columns+1)), 0, columns)
-                right_panel.addWidget(Color('grey'), rows+1, columns)
+        project_widget.setLayout(project_layout)
+        employees_widget.setLayout(employees_layout)
+        tasks_widget.setLayout(tasks_layout)
 
-        left_panel.addWidget(QLabel("Jakiś tam projekt nr 1"), 1, 0)     #
-        for i in range(10):                                              # do usuniecia, tylko przyklad
-            right_panel.addWidget(Color('green'), 1, i)                  #
+        projects_right.addWidget(gantt_widget)
+        projects_right.addWidget(project_widget)
+        projects_right.addWidget(employees_widget)
+        projects_right.addWidget(tasks_widget)
 
-        left_panel.addWidget(QLabel("Projekt nr 2"), 2, 0)               #
-        for i in range(5,15):                                            # do usuniecia, tylko przyklad
-            right_panel.addWidget(Color('red'), 2, i)                    #
+        btn_gantt = QPushButton('Gantt Chart')
+        btn_gantt.clicked.connect(lambda: projects_right.setCurrentIndex(0))
+        btn_projects = QPushButton('Project')
+        btn_projects.clicked.connect(lambda: projects_right.setCurrentIndex(1))
+        btn_employees = QPushButton('Employes')
+        btn_employees.clicked.connect(lambda: projects_right.setCurrentIndex(2))
+        btn_tasks = QPushButton('Tasks')
+        btn_tasks.clicked.connect(lambda: projects_right.setCurrentIndex(3))
 
-        left_panel.addWidget(QLabel("Projekt nr 3"), 4, 0)               #
-        for i in range(3, 20):                                           # do usuniecia, tylko przyklad
-            right_panel.addWidget(Color('blue'), 4, i)                   #
+        projects.addLayout(projects_left)
+        projects.addLayout(projects_right)
+        primary_widget.setLayout(projects)
 
-        left_panel.addWidget(QLabel("Projekt nr 4"), 5, 0)               #
-        for i in range(4, 25):                                           # do usuniecia, tylko przyklad
-            right_panel.addWidget(Color('purple'), 5, i)                 #
-   
-        layout.addLayout(left_panel)
-        layout.addLayout(right_panel)
-        tab1.setLayout(layout)
+        projects_left.setAlignment(Qt.AlignCenter)
+        projects_left.addWidget(btn_gantt)
+        projects_left.addWidget(btn_projects)
+        projects_left.addWidget(btn_employees)
+        projects_left.addWidget(btn_tasks)
 
-        lista_dni = []
-        for i in range(1,31):
-            lista_dni.append(str(i))
-
-        self.combobox1 = QComboBox()
-        self.combobox1.addItems(lista_dni)
-        self.combobox2 = QComboBox()
-        self.combobox2.addItems(lista_dni)
-        self.button1 = QPushButton("Add Project")
-        self.project_name = QLineEdit()
-
-
-        layout2 = QGridLayout()
-        layout2.addWidget(QLabel("Project name"), 0, 0)
-        layout2.addWidget(QLabel("Start date"), 1, 0)
-        layout2.addWidget(QLabel("End date"), 2, 0)
-        layout2.addWidget(self.project_name, 0, 1)
-        layout2.addWidget(self.combobox1, 1, 1)
-        layout2.addWidget(self.combobox2, 2, 1)
-        layout2.addWidget(self.button1, 1, 3)
-
-        tab2.setLayout(layout2)
-
-        self.button1.setCheckable(True)
-        self.button1.clicked.connect(self.button_checked)
-        self.combobox1.activated.connect(self.check_index1)
-        self.combobox2.activated.connect(self.check_index2)
-        self.setCentralWidget(tabs)
-
-
-
-
-    def button_checked(self):
-        if self.button1.isChecked():
-            global start_date, end_date, project_name, tab1, layout1, project_nr
-            display = self.project_name.text()
-            left_panel.addWidget(QLabel(display), project_nr, 0)
-            for i in range(start_date, end_date):
-                right_panel.addWidget(Color(colors[project_nr-6]), project_nr, i)   # usunac -6 gdy przyklady projektow usuniete
-            project_nr = project_nr + 1
-
-
-
-    def check_index1(self, index):
-        global start_date
-        start_date = index
-
-    def check_index2(self, index):
-        global end_date
-        end_date = index
-
+        self.setCentralWidget(primary_widget)
 
 
 app = QApplication(sys.argv)
+
+if not create_connection():
+    sys.exit(1)
+
+setup_database()
+
 window = MainWindow()
 window.show()
 app.exec()
